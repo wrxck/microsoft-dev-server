@@ -32,7 +32,7 @@ type Meeting struct {
 	StartDateTime string          `json:"startDateTime"`
 	EndDateTime   string          `json:"endDateTime"`
 	JoinWebURL    string          `json:"joinWebUrl"`
-	RawRequest   json.RawMessage `json:"rawRequest"`
+	RawRequest    json.RawMessage `json:"rawRequest"`
 }
 
 // Store keeps the most recent N captures in memory. Oldest items are

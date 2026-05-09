@@ -202,12 +202,12 @@ func (h *Handler) onlineMeetings(w http.ResponseWriter, r *http.Request) {
 	})
 
 	resp := map[string]any{
-		"id":            id,
+		"id":               id,
 		"creationDateTime": time.Now().UTC().Format(time.RFC3339),
-		"startDateTime": req.StartDateTime,
-		"endDateTime":   req.EndDateTime,
-		"subject":       req.Subject,
-		"joinWebUrl":    joinURL,
+		"startDateTime":    req.StartDateTime,
+		"endDateTime":      req.EndDateTime,
+		"subject":          req.Subject,
+		"joinWebUrl":       joinURL,
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }

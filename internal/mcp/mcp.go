@@ -204,7 +204,9 @@ func (s *server) callTool(ctx context.Context, name string, args json.RawMessage
 	case "list_captured_mail":
 		return s.getJSON(ctx, "/_dev/mail")
 	case "get_captured_mail":
-		var a struct{ ID string `json:"id"` }
+		var a struct {
+			ID string `json:"id"`
+		}
 		_ = json.Unmarshal(args, &a)
 		if a.ID == "" {
 			return nil, fmt.Errorf("missing id")
@@ -215,7 +217,9 @@ func (s *server) callTool(ctx context.Context, name string, args json.RawMessage
 	case "list_captured_meetings":
 		return s.getJSON(ctx, "/_dev/meetings")
 	case "get_captured_meeting":
-		var a struct{ ID string `json:"id"` }
+		var a struct {
+			ID string `json:"id"`
+		}
 		_ = json.Unmarshal(args, &a)
 		if a.ID == "" {
 			return nil, fmt.Errorf("missing id")
