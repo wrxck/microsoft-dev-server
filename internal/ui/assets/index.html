@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>microsoft-dev-server</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">microsoft-dev-server</div>
+    <nav>
+      <button class="tab active" data-tab="mail">Mail</button>
+      <button class="tab" data-tab="meetings">Meetings</button>
+    </nav>
+    <div class="actions">
+      <button id="refresh">Refresh</button>
+      <button id="clear">Clear</button>
+    </div>
+  </header>
+  <main>
+    <section id="mail-list" class="list active"></section>
+    <section id="meetings-list" class="list"></section>
+    <aside id="detail">
+      <p class="muted">Select an item to inspect.</p>
+    </aside>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
