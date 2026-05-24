@@ -11,6 +11,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -196,6 +197,37 @@ func tools() []map[string]any {
 			"description": "Returns the running server's status: counts and configured user identity.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 		},
+		{
+			"name":        "list_scenarios",
+			"description": "Returns currently-queued forced scenarios (responses the handler will return instead of the normal mock behaviour).",
+			"inputSchema": map[string]any{"type": "object"},
+		},
+		{
+			"name":        "list_scenario_presets",
+			"description": "Returns the catalogue of named graph failure presets (401 InvalidAuthenticationToken, 403 AccessDenied, 429 TooManyRequests with Retry-After, 5xx, sendMail-specific quota/access). Each preset body matches the documented graph error envelope.",
+			"inputSchema": map[string]any{"type": "object"},
+		},
+		{
+			"name":        "queue_scenario",
+			"description": "Queue a forced scenario. Supply preset_key for a documented failure mode, or build a custom one. Default policy is one-shot.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"preset_key":    map[string]any{"type": "string"},
+					"description":   map[string]any{"type": "string"},
+					"method":        map[string]any{"type": "string"},
+					"path_contains": map[string]any{"type": "string"},
+					"status":        map[string]any{"type": "integer"},
+					"body":          map[string]any{"type": "string"},
+					"sticky":        map[string]any{"type": "boolean"},
+				},
+			},
+		},
+		{
+			"name":        "clear_scenarios",
+			"description": "Clear all queued forced scenarios.",
+			"inputSchema": map[string]any{"type": "object"},
+		},
 	}
 }
 
@@ -229,6 +261,34 @@ func (s *server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.deleteJSON(ctx, "/_dev/meetings")
 	case "get_server_status":
 		return s.getJSON(ctx, "/_dev/status")
+	case "list_scenarios":
+		return s.getJSON(ctx, "/_dev/scenarios")
+	case "list_scenario_presets":
+		return s.getJSON(ctx, "/_dev/scenario-presets")
+	case "queue_scenario":
+		var a struct {
+			PresetKey    string `json:"preset_key"`
+			Description  string `json:"description"`
+			Method       string `json:"method"`
+			PathContains string `json:"path_contains"`
+			Status       int    `json:"status"`
+			Body         string `json:"body"`
+			Sticky       bool   `json:"sticky"`
+		}
+		_ = json.Unmarshal(args, &a)
+		oneShot := !a.Sticky
+		body, _ := json.Marshal(map[string]any{
+			"presetKey":    a.PresetKey,
+			"description":  a.Description,
+			"method":       a.Method,
+			"pathContains": a.PathContains,
+			"status":       a.Status,
+			"bodyJson":     a.Body,
+			"oneShot":      oneShot,
+		})
+		return s.postJSON(ctx, "/_dev/scenarios", body)
+	case "clear_scenarios":
+		return s.deleteJSON(ctx, "/_dev/scenarios")
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -267,4 +327,23 @@ func (s *server) deleteJSON(ctx context.Context, path string) (any, error) {
 		return nil, fmt.Errorf("upstream %d: %s", resp.StatusCode, string(body))
 	}
 	return map[string]any{"ok": true}, nil
+}
+
+func (s *server) postJSON(ctx context.Context, path string, body []byte) (any, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.upstream+path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("upstream %d: %s", resp.StatusCode, string(b))
+	}
+	var v any
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
