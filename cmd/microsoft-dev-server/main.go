@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/wrxck/microsoft-dev-server/internal/mcp"
+	"github.com/wrxck/microsoft-dev-server/internal/scenarios"
 	"github.com/wrxck/microsoft-dev-server/internal/server"
 	"github.com/wrxck/microsoft-dev-server/internal/store"
 	"github.com/wrxck/microsoft-dev-server/internal/ui"
@@ -67,12 +68,13 @@ func runHTTP(args []string) int {
 	_ = fs.Parse(args)
 
 	st := store.New(*maxItems)
+	sc := scenarios.NewStore()
 	server.SetUI(ui.Handler())
 	h := server.New(server.Config{
 		UserEmail: *userEmail,
 		UserName:  *userName,
 		UserID:    *userID,
-	}, st)
+	}, st, sc)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 

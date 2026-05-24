@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wrxck/microsoft-dev-server/internal/scenarios"
 	"github.com/wrxck/microsoft-dev-server/internal/store"
 )
 
@@ -24,14 +25,16 @@ type Config struct {
 	UserID    string
 }
 
-// Handler bundles the HTTP routing for the fake Graph + inspection API.
+// handler bundles the http routing for the fake graph + inspection api.
 type Handler struct {
-	cfg   Config
-	store *store.Store
+	cfg       Config
+	store     *store.Store
+	scenarios *scenarios.Store
 }
 
-// New constructs a Handler.
-func New(cfg Config, st *store.Store) *Handler {
+// new constructs a handler. scenarios may be nil for callers that don't
+// want the forced-response feature.
+func New(cfg Config, st *store.Store, sc *scenarios.Store) *Handler {
 	if cfg.UserEmail == "" {
 		cfg.UserEmail = "rebecca@dev.local"
 	}
@@ -41,7 +44,28 @@ func New(cfg Config, st *store.Store) *Handler {
 	if cfg.UserID == "" {
 		cfg.UserID = "00000000-0000-0000-0000-000000000001"
 	}
-	return &Handler{cfg: cfg, store: st}
+	return &Handler{cfg: cfg, store: st, scenarios: sc}
+}
+
+// maybeForceScenario writes a queued forced response if one matches the
+// current request. returns true if it served the response, in which
+// case the caller must return without doing anything else.
+func (h *Handler) maybeForceScenario(w http.ResponseWriter, r *http.Request) bool {
+	if h.scenarios == nil {
+		return false
+	}
+	sc := h.scenarios.MatchAndConsume(r.Method, r.URL.Path)
+	if sc == nil {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Forced-Scenario", sc.ID)
+	for k, v := range sc.Headers {
+		w.Header().Set(k, v)
+	}
+	w.WriteHeader(sc.Status)
+	_, _ = w.Write([]byte(sc.BodyJSON))
+	return true
 }
 
 // Routes registers all routes on the given mux.
@@ -54,12 +78,15 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// OAuth token endpoints (catch any tenant).
 	mux.HandleFunc("/", h.dispatchRoot)
 
-	// Dev/inspection endpoints.
+	// dev/inspection endpoints.
 	mux.HandleFunc("/_dev/mail", h.devMailList)
 	mux.HandleFunc("/_dev/mail/", h.devMailGet)
 	mux.HandleFunc("/_dev/meetings", h.devMeetingsList)
 	mux.HandleFunc("/_dev/meetings/", h.devMeetingsGet)
 	mux.HandleFunc("/_dev/status", h.devStatus)
+	mux.HandleFunc("/_dev/scenarios", h.devScenarios)
+	mux.HandleFunc("/_dev/scenarios/", h.devScenarioDelete)
+	mux.HandleFunc("/_dev/scenario-presets", h.devScenarioPresets)
 }
 
 // dispatchRoot routes the OAuth token endpoint and the UI root.
@@ -102,6 +129,9 @@ func (h *Handler) uiIndex(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) sendMail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.maybeForceScenario(w, r) {
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
@@ -177,6 +207,9 @@ func (h *Handler) onlineMeetings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if h.maybeForceScenario(w, r) {
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -214,6 +247,9 @@ func (h *Handler) onlineMeetings(w http.ResponseWriter, r *http.Request) {
 
 // me returns a canned identity for the authenticated user.
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	if h.maybeForceScenario(w, r) {
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -330,4 +366,106 @@ func newRandomID() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// devScenarios handles GET (list) / POST (queue) / DELETE (clear all).
+func (h *Handler) devScenarios(w http.ResponseWriter, r *http.Request) {
+	if h.scenarios == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, h.scenarios.All())
+	case http.MethodPost:
+		var body struct {
+			PresetKey    string            `json:"presetKey"`
+			Description  string            `json:"description"`
+			Method       string            `json:"method"`
+			PathContains string            `json:"pathContains"`
+			Status       int               `json:"status"`
+			Headers      map[string]string `json:"headers"`
+			BodyJSON     string            `json:"bodyJson"`
+			OneShot      *bool             `json:"oneShot"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&body); err != nil {
+			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.PresetKey != "" {
+			p := scenarios.PresetByKey(body.PresetKey)
+			if p == nil {
+				http.Error(w, "unknown preset key", http.StatusBadRequest)
+				return
+			}
+			if body.Method == "" {
+				body.Method = p.Method
+			}
+			if body.PathContains == "" {
+				body.PathContains = p.PathContains
+			}
+			if body.Status == 0 {
+				body.Status = p.Status
+			}
+			if body.BodyJSON == "" {
+				body.BodyJSON = p.Body
+			}
+			if body.Description == "" {
+				body.Description = p.Label
+			}
+			if body.Headers == nil {
+				body.Headers = p.Headers
+			}
+		}
+		if body.Status == 0 {
+			http.Error(w, "status is required (or pick a preset)", http.StatusBadRequest)
+			return
+		}
+		oneShot := true
+		if body.OneShot != nil {
+			oneShot = *body.OneShot
+		}
+		id := h.scenarios.Add(&scenarios.Scenario{
+			Description:  body.Description,
+			Method:       body.Method,
+			PathContains: body.PathContains,
+			Status:       body.Status,
+			Headers:      body.Headers,
+			BodyJSON:     body.BodyJSON,
+			OneShot:      oneShot,
+		})
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+	case http.MethodDelete:
+		h.scenarios.Clear()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// devScenarioDelete handles DELETE /_dev/scenarios/{id}.
+func (h *Handler) devScenarioDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.scenarios == nil {
+		http.Error(w, "scenarios disabled", http.StatusNotFound)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/_dev/scenarios/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if !h.scenarios.Delete(id) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// devScenarioPresets returns the catalogue of named graph failures.
+func (h *Handler) devScenarioPresets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, scenarios.Presets)
 }

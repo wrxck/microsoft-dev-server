@@ -18,7 +18,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 		UserEmail: "rebecca@x.com",
 		UserName:  "Rebecca",
 		UserID:    "u-1",
-	}, st)
+	}, st, nil)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	srv := httptest.NewServer(mux)
