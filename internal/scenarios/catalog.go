@@ -7,14 +7,14 @@ import "fmt"
 // learn.microsoft.com/graph/errors so any consumer's error-decode path
 // is exercised exactly as in production.
 type Preset struct {
-	Key          string `json:"key"`
-	Label        string `json:"label"`
-	Description  string `json:"description"`
-	Method       string `json:"method"`
-	PathContains string `json:"pathContains"`
-	Status       int    `json:"status"`
+	Key          string            `json:"key"`
+	Label        string            `json:"label"`
+	Description  string            `json:"description"`
+	Method       string            `json:"method"`
+	PathContains string            `json:"pathContains"`
+	Status       int               `json:"status"`
 	Headers      map[string]string `json:"headers,omitempty"`
-	Body         string `json:"body"`
+	Body         string            `json:"body"`
 }
 
 // presets is the catalogue.
