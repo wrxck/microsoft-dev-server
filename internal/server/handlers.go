@@ -71,6 +71,7 @@ func (h *Handler) maybeForceScenario(w http.ResponseWriter, r *http.Request) boo
 // Routes registers all routes on the given mux.
 func (h *Handler) Routes(mux *http.ServeMux) {
 	// Graph API surface (only what we use today).
+	mux.HandleFunc("/v1.0/me/calendar/getSchedule", h.getSchedule)
 	mux.HandleFunc("/v1.0/me/sendMail", h.sendMail)
 	mux.HandleFunc("/v1.0/me/onlineMeetings", h.onlineMeetings)
 	mux.HandleFunc("/v1.0/me", h.me)
@@ -95,6 +96,12 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 func (h *Handler) dispatchRoot(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, "/oauth2/v2.0/token") {
 		h.token(w, r)
+		return
+	}
+	// the app-level form carries a user id in the path, so it cannot be a
+	// fixed route: /v1.0/users/{id}/calendar/getSchedule
+	if strings.HasSuffix(r.URL.Path, "/calendar/getSchedule") {
+		h.getSchedule(w, r)
 		return
 	}
 	if r.URL.Path == "/" {
