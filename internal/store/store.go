@@ -35,12 +35,29 @@ type Meeting struct {
 	RawRequest    json.RawMessage `json:"rawRequest"`
 }
 
+// Event captures one POST .../events call, i.e. a calendar event.
+type Event struct {
+	ID            string          `json:"id"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	Subject       string          `json:"subject"`
+	StartDateTime string          `json:"startDateTime"`
+	EndDateTime   string          `json:"endDateTime"`
+	TimeZone      string          `json:"timeZone,omitempty"`
+	Location      string          `json:"location,omitempty"`
+	BodyType      string          `json:"bodyType,omitempty"`
+	BodyContent   string          `json:"bodyContent,omitempty"`
+	Attendees     []string        `json:"attendees,omitempty"`
+	WebLink       string          `json:"webLink"`
+	RawRequest    json.RawMessage `json:"rawRequest"`
+}
+
 // Store keeps the most recent N captures in memory. Oldest items are
 // discarded when the buffer fills.
 type Store struct {
 	mu       sync.RWMutex
 	mails    []*Mail
 	meetings []*Meeting
+	events   []*Event
 	max      int
 }
 
@@ -143,11 +160,63 @@ func (s *Store) ClearMeetings() {
 	s.meetings = nil
 }
 
+// AddEvent records a captured calendar event call. Returns the assigned ID.
+func (s *Store) AddEvent(e *Event) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e.ID == "" {
+		e.ID = newID()
+	}
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
+	s.events = append([]*Event{e}, s.events...)
+	if len(s.events) > s.max {
+		s.events = s.events[:s.max]
+	}
+	return e.ID
+}
+
+// Events returns a snapshot copy of captured events (newest first).
+func (s *Store) Events() []*Event {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Event, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
+// EventByID returns the event with the given ID, or nil if not found.
+func (s *Store) EventByID(id string) *Event {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.events {
+		if e.ID == id {
+			return e
+		}
+	}
+	return nil
+}
+
+// ClearEvents drops all captured events.
+func (s *Store) ClearEvents() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = nil
+}
+
 // Counts returns the current number of captured mails and meetings.
 func (s *Store) Counts() (mails, meetings int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.mails), len(s.meetings)
+}
+
+// EventCount returns the current number of captured calendar events.
+func (s *Store) EventCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.events)
 }
 
 func newID() string {

@@ -1,7 +1,8 @@
 # microsoft-dev-server
 
 A fake Microsoft Graph API server for development and testing. Captures the
-Graph calls your application makes (sendMail, online-meeting create) and lets
+Graph calls your application makes (sendMail, online-meeting create,
+calendar-event create) and lets
 you inspect them in a dark-mode web UI or via an MCP client.
 
 Inspired by [`smtp-dev-server`](https://github.com/wrxck/smtp-dev-server) by
@@ -43,7 +44,16 @@ http://127.0.0.1:8080 in your browser to inspect captures.
 |----------|-----------|
 | `POST /v1.0/me/sendMail` | Captures the request body. Returns `202 Accepted` (matches Graph). |
 | `POST /v1.0/me/onlineMeetings` | Returns a Graph-shaped `onlineMeeting` response with a fake `joinWebUrl` (`https://teams.microsoft.com/l/meetup-join/dev_<id>`). Captures the request. |
+| `POST /v1.0/me/events` | Creates a calendar event. Returns a Graph-shaped `event` with a fake `webLink`. Captures subject, start/end, time zone, location, body and attendees. `/v1.0/me/calendar/events` is accepted too. |
 | `GET /v1.0/me` | Returns a canned identity (configurable via `--user-email`, `--user-name`, `--user-id`). |
+
+Every endpoint above is also served in the **app-level (client-credentials)
+form**, where the mailbox is named in the path rather than implied by the
+token — `POST /v1.0/users/{id}/sendMail`, `/onlineMeetings`, `/events`,
+`/calendar/events` and `/calendar/getSchedule`, plus `GET /v1.0/users/{id}`.
+A client using application permissions must address the mailbox this way, so
+serving only `/me` left those calls returning 404. One mailbox is stood in for
+whatever id is asked for. Paths outside `/v1.0/users/...` still 404.
 | `POST /<tenant>/oauth2/v2.0/token` | Returns a fake bearer token (`access_token: dev_<random>`). Accepts any grant type. |
 
 ## Inspection / management endpoints
@@ -56,7 +66,10 @@ http://127.0.0.1:8080 in your browser to inspect captures.
 | `GET /_dev/meetings` | List of captured online-meeting creates. |
 | `GET /_dev/meetings/{id}` | Single captured meeting. |
 | `DELETE /_dev/meetings` | Clear all captured meetings. |
-| `GET /_dev/status` | Counts and configured user identity. |
+| `GET /_dev/events` | List of captured calendar-event creates. |
+| `GET /_dev/events/{id}` | Single captured event. |
+| `DELETE /_dev/events` | Clear all captured events. |
+| `GET /_dev/status` | Counts (`capturedMail`, `capturedMeets`, `capturedEvents`) and configured user identity. |
 
 ## Configuration
 
