@@ -74,6 +74,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1.0/me/calendar/getSchedule", h.getSchedule)
 	mux.HandleFunc("/v1.0/me/sendMail", h.sendMail)
 	mux.HandleFunc("/v1.0/me/onlineMeetings", h.onlineMeetings)
+	mux.HandleFunc("/v1.0/me/events", h.events)
+	mux.HandleFunc("/v1.0/me/calendar/events", h.events)
 	mux.HandleFunc("/v1.0/me", h.me)
 
 	// OAuth token endpoints (catch any tenant).
@@ -84,6 +86,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/_dev/mail/", h.devMailGet)
 	mux.HandleFunc("/_dev/meetings", h.devMeetingsList)
 	mux.HandleFunc("/_dev/meetings/", h.devMeetingsGet)
+	mux.HandleFunc("/_dev/events", h.devEventsList)
+	mux.HandleFunc("/_dev/events/", h.devEventsGet)
 	mux.HandleFunc("/_dev/status", h.devStatus)
 	mux.HandleFunc("/_dev/scenarios", h.devScenarios)
 	mux.HandleFunc("/_dev/scenarios/", h.devScenarioDelete)
@@ -98,8 +102,32 @@ func (h *Handler) dispatchRoot(w http.ResponseWriter, r *http.Request) {
 		h.token(w, r)
 		return
 	}
-	// the app-level form carries a user id in the path, so it cannot be a
-	// fixed route: /v1.0/users/{id}/calendar/getSchedule
+	// The app-level form names the mailbox in the path, so these cannot be
+	// fixed routes: /v1.0/users/{id}/calendar/getSchedule, /sendMail,
+	// /onlineMeetings, /events and /calendar/events. Only /v1.0/users/... is
+	// accepted, so an unrelated path still 404s.
+	if isUserScopedGraphPath(r.URL.Path) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/calendar/getSchedule"):
+			h.getSchedule(w, r)
+			return
+		case strings.HasSuffix(r.URL.Path, "/sendMail"):
+			h.sendMail(w, r)
+			return
+		case strings.HasSuffix(r.URL.Path, "/onlineMeetings"):
+			h.onlineMeetings(w, r)
+			return
+		case strings.HasSuffix(r.URL.Path, "/events"),
+			strings.HasSuffix(r.URL.Path, "/calendar/events"):
+			h.events(w, r)
+			return
+		}
+		// /v1.0/users/{id} with nothing after it is the mailbox lookup.
+		if userScopedLeaf(r.URL.Path) {
+			h.me(w, r)
+			return
+		}
+	}
 	if strings.HasSuffix(r.URL.Path, "/calendar/getSchedule") {
 		h.getSchedule(w, r)
 		return
@@ -252,6 +280,87 @@ func (h *Handler) onlineMeetings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+// events accepts the Graph calendar-event shape and stores the captured
+// payload. Returns 201 Created with an event resource, mirroring Graph.
+func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.maybeForceScenario(w, r) {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Subject string `json:"subject"`
+		Body    struct {
+			ContentType string `json:"contentType"`
+			Content     string `json:"content"`
+		} `json:"body"`
+		Start struct {
+			DateTime string `json:"dateTime"`
+			TimeZone string `json:"timeZone"`
+		} `json:"start"`
+		End struct {
+			DateTime string `json:"dateTime"`
+			TimeZone string `json:"timeZone"`
+		} `json:"end"`
+		Location struct {
+			DisplayName string `json:"displayName"`
+		} `json:"location"`
+		Attendees []struct {
+			EmailAddress struct {
+				Address string `json:"address"`
+			} `json:"emailAddress"`
+		} `json:"attendees"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	attendees := make([]string, 0, len(req.Attendees))
+	for _, a := range req.Attendees {
+		if a.EmailAddress.Address != "" {
+			attendees = append(attendees, a.EmailAddress.Address)
+		}
+	}
+
+	id := newRandomID()
+	webLink := fmt.Sprintf("https://outlook.office365.com/calendar/item/dev_%s", id)
+
+	h.store.AddEvent(&store.Event{
+		ID:            id,
+		Subject:       req.Subject,
+		StartDateTime: req.Start.DateTime,
+		EndDateTime:   req.End.DateTime,
+		TimeZone:      req.Start.TimeZone,
+		Location:      req.Location.DisplayName,
+		BodyType:      req.Body.ContentType,
+		BodyContent:   req.Body.Content,
+		Attendees:     attendees,
+		WebLink:       webLink,
+		RawRequest:    body,
+	})
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	resp := map[string]any{
+		"id":                   id,
+		"createdDateTime":      now,
+		"lastModifiedDateTime": now,
+		"subject":              req.Subject,
+		"webLink":              webLink,
+		"start":                map[string]string{"dateTime": req.Start.DateTime, "timeZone": req.Start.TimeZone},
+		"end":                  map[string]string{"dateTime": req.End.DateTime, "timeZone": req.End.TimeZone},
+		"location":             map[string]string{"displayName": req.Location.DisplayName},
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
 // me returns a canned identity for the authenticated user.
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	if h.maybeForceScenario(w, r) {
@@ -339,13 +448,40 @@ func (h *Handler) devMeetingsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
+func (h *Handler) devEventsList(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, h.store.Events())
+	case http.MethodDelete:
+		h.store.ClearEvents()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) devEventsGet(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/_dev/events/")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	e := h.store.EventByID(id)
+	if e == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, e)
+}
+
 func (h *Handler) devStatus(w http.ResponseWriter, r *http.Request) {
 	mails, meetings := h.store.Counts()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":            true,
-		"capturedMail":  mails,
-		"capturedMeets": meetings,
-		"now":           time.Now().UTC().Format(time.RFC3339),
+		"ok":             true,
+		"capturedMail":   mails,
+		"capturedMeets":  meetings,
+		"capturedEvents": h.store.EventCount(),
+		"now":            time.Now().UTC().Format(time.RFC3339),
 		"user": map[string]string{
 			"id":    h.cfg.UserID,
 			"name":  h.cfg.UserName,
@@ -367,6 +503,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 		// Body already partly written; nothing useful to do.
 		_ = err
 	}
+}
+
+// isUserScopedGraphPath reports whether a path addresses a named mailbox,
+// as the app-level (client-credentials) form does: /v1.0/users/{id}/...
+func isUserScopedGraphPath(path string) bool {
+	return strings.HasPrefix(path, "/v1.0/users/")
+}
+
+// userScopedLeaf reports whether the path is exactly /v1.0/users/{id}, the
+// mailbox lookup itself rather than an action on it.
+func userScopedLeaf(path string) bool {
+	rest := strings.TrimSuffix(strings.TrimPrefix(path, "/v1.0/users/"), "/")
+	return rest != "" && !strings.Contains(rest, "/")
 }
 
 func newRandomID() string {
